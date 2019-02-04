@@ -1,5 +1,29 @@
-const request = require('request-promise');
+const rp = require('request-promise');
 const _ = require('lodash');
+const Promise = require('bluebird');
+
+// wrap request-promise with up to 60 retries and an
+// automatic JSON.parse of the response
+
+async function request() {
+  let result;
+  let i;
+  let lastError;
+  for (i = 0; (i < 60); i++) {
+    try {
+      result = await rp.apply(null, arguments);
+      break; 
+    } catch (e) {
+      lastError = e;
+      console.log(`Retrying request (${i+1} of 60)...`);
+      await Promise.delay(1000);
+    }
+  }
+  if (i === 60) {
+    throw lastError;
+  }
+  return JSON.parse(result);
+}
 
 module.exports = {
   moogBundle: {
@@ -22,14 +46,15 @@ module.exports = {
         if (!fbOptions) {
           continue;
         }
-        if (!(fbOptions.likes || fbOptions.shares)) {
-          self.apos.utils.warn('facebook metrics are enabled for ' + manager.__meta.name + ', but\nneither "likes" nor "shares" are enabled.');
+        if (_.isEmpty(fbOptions)) {
+          self.apos.utils.warn('facebook metrics are enabled for ' + manager.__meta.name + ', but\nno metrics such as "comments", "shares" or "reactions" have been configured.');
           continue;
         }
         let lastId = '';
         for (locale of self.getLocales()) {
-          // Updates page metrics in batches of 50, which is also
-          // Facebook's limit for batch queries
+          // Updates page metrics in batches of 100 for performance,
+          // also a reasonable batch query size for sharedcount when that
+          // API matures
           while (await batch(locale));
         }
         async function batch(locale) {
@@ -37,7 +62,7 @@ module.exports = {
           const req = self.apos.tasks.getAnonReq({ workflowLocale: locale });
           let pages = await manager.find(req, { 
             _id: {
-              $gte: lastId
+              $gt: lastId
             }
           }, 
           { 
@@ -45,77 +70,74 @@ module.exports = {
             popularityMetrics: 1
           }).sort({
             _id: 1
-          }).limit(50).toArray();
+          }).limit(100).toArray();
           if (!pages.length) {
             return false;
           }
           lastId = pages[pages.length - 1]._id;
-          const form = {
-            include_headers: false
-          };
-          let batch = [];
           pages = pages.filter(page => {
             return page._url;
           });
-          for (let page of pages) {
-            if (page._url.substring(0, 4) !== 'http') {
-              throw 'You must set the baseUrl option for your site when using this task.';
-            }
-            batch.push({
+          const key = self.getOption(req, 'sharedcountApiKey');
+          if (!key) {
+            throw 'You must set the sharedcountApiKey option of apostrophe-docs-popularity.';
+          }
+          let response = await request('https://api.sharedcount.com/bulk', {
+            method: 'POST',
+            qs: {
+              apikey: key
+            },
+            body: pages.map(page => page._url).join('\n')
+          });
+          if (!(response && response.bulk_id)) {
+            throw 'Bad response from sharedcount, possibly they changed the bulk API';
+          }
+          const bulkId = response.bulk_id;
+          let results;
+          while (true) {
+            const response = await request('https://api.sharedcount.com/bulk', {
               method: 'GET',
-              relative_url: '?fields=og_object%7Blikes.summary(total_count).limit(0)%7D,share&id=' + encodeURIComponent(page._url)
+              qs: {
+                apikey: key,
+                bulk_id: bulkId
+              }
             });
-          }
-          if (!batch.length) {
-            return true;
-          }
-          let response;
-          form.batch = JSON.stringify(batch);
-          for (let i = 0; (i < 60); i++) {
-            try {
-              console.log(form);
-              response = await request('https://graph.facebook.com', { form: form });
-              if ((!response) || (response.length !== query.batch.length)) {
-                throw 'Malformed response from Facebook';
-              }
-              for (let item of response) {
-                if ((!item) || (item.code >= 400)) {
-                  throw 'Individual item has no response or bad status code: ' + (item && item.code);
-                }
-              }
+            if (response._meta && response._meta.completed) {
+              results = response.data;
               break;
-            } catch (e) {
-              console.warn(e);
-              console.warn('Encountered facebook API issue, retrying in 1 minute');
-              await Promise.delay(60000);
             }
+            await Promise.delay(1000);
           }
-          for (let item of response) {
-            if ((item.code >= 200) && (item.code < 300) && (item.body)) {
-              const data = JSON.parse(item.body);
-              const oldScore = self.facebookScore(page.popularityMetrics && page.popularityMetrics.facebook, fbOptions);
-              page.popularityMetrics = page.popularityMetrics || {};
-              page.popularityMetrics.facebook = page.popularityMetrics.facebook || {};
-              page.popularityMetrics.facebook.likes = _.get(data, 'og_object.likes.summary.total_count');
-              page.popularityMetrics.facebook.shares = _.get(data, 'share.share_count');
-              const newScore = self.facebookScore(page.popularityMetrics.facebook, fbOptions);
-              const delta = (newScore - oldScore);
-              await self.apos.docs.db.update({
-                _id: page._id
-              }, {
-                $set: {
-                  'popularityMetrics.facebook': page.popularityMetrics.facebook
+          const ops = [];
+          console.log('updating db');
+          for (let page of pages) {
+            const result = results[page._url] && results[page._url].Facebook;
+            if (result) {
+              const oldScore = (page.popularityMetrics && page.popularityMetrics.facebook && page.popularityMetrics.facebook.score) || 0.0;
+              const score = self.facebookScore(results[page._url].Facebook, fbOptions);
+              const facebook = {
+                ...result,
+                score
+              };
+              const delta = score - oldScore;
+              ops.push({
+                updateOne: {
+                  filter: {
+                    _id: page._id
+                  },
+                  update: {
+                    $set: {
+                      'popularityMetrics.facebook': facebook
+                    },
+                    $inc: {
+                      'popularity': delta
+                    }
+                  }
                 }
               });
-              await self.apos.docs.db.update({
-                _id: page._id
-              }, {
-                $inc: {
-                  'popularity': delta
-                }
-              });
             }
           }
+          await self.apos.docs.db.bulkWrite(ops, { ordered: false });
           return true;
         }
       }
@@ -129,17 +151,21 @@ module.exports = {
         return (!locale.match(/-draft$/)) && (!workflow.locales[locale].private);
       });
     };
-    self.facebookScore = function(metrics, options) {
-      if (!metrics) {
+    self.facebookScore = function(sharedcount, options) {
+      if (!sharedcount) {
         return 0;
       }
       let score = 0;
-      if (options.likes) {
-        score += (options.likes.score || 1.0) * metrics.likes;
-      }
-      if (options.shares) {
-        score += (options.shares.score || 1.0) * metrics.shares;
-      }
+      const map = {
+        comments: 'comment_count',
+        shares: 'share_count',
+        reactions: 'reaction_count'
+      };
+      Object.keys(map).forEach(metric => {
+        if (options[metric]) {
+          score += (options[metric].score || 1.0) * sharedcount[map[metric]];
+        }
+      });
       return score;
     };
   }
