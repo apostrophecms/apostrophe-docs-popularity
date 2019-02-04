@@ -2,18 +2,23 @@ const request = require('request-promise');
 const _ = require('lodash');
 
 module.exports = {
+  moogBundle: {
+    modules: [ 'apostrophe-doc-type-manager-popularity' ],
+    directory: 'lib/modules'
+  },
   construct: function(self, options) {
-    self.addTask('update-metrics', async function(apos, argv) {
+    self.addTask('update-metrics', 'Update popularity metrics for all documents for which external metrics\n' + 'such as Facebook likes are configured', async function(apos, argv) {
       await self.facebookUpdate();
     });
     self.facebookUpdate = async function() {
-      const types = self.apos.docs.managers.keys();
+      const types = Object.keys(self.apos.docs.managers);
       for (let type of types) {
         const manager = self.apos.docs.getManager(type);
         if (!manager) {
           continue;
         }
-        const fbOptions = manager.getOption('popularity.metrics.facebook');
+        const req = self.apos.tasks.getReq();
+        const fbOptions = manager.getOption(req, 'popularity.metrics.facebook');
         if (!fbOptions) {
           continue;
         }
@@ -21,16 +26,16 @@ module.exports = {
           self.apos.utils.warn('facebook metrics are enabled for ' + manager.__meta.name + ', but\nneither "likes" nor "shares" are enabled.');
           continue;
         }
-        const lastId = '';
+        let lastId = '';
         for (locale of self.getLocales()) {
           // Updates page metrics in batches of 50, which is also
           // Facebook's limit for batch queries
           while (await batch(locale));
         }
-        function batch(locale) {
+        async function batch(locale) {
           // Public pages are the only interesting ones for FB popularity
-          const req = apos.tasks.getAnonReq({ workflowLocale: locale });
-          const pages = await manager.find(req, { 
+          const req = self.apos.tasks.getAnonReq({ workflowLocale: locale });
+          let pages = await manager.find(req, { 
             _id: {
               $gte: lastId
             }
@@ -45,10 +50,10 @@ module.exports = {
             return false;
           }
           lastId = pages[pages.length - 1]._id;
-          const query = {
-            include_headers: false,
-            batch: []
+          const form = {
+            include_headers: false
           };
+          let batch = [];
           pages = pages.filter(page => {
             return page._url;
           });
@@ -56,17 +61,20 @@ module.exports = {
             if (page._url.substring(0, 4) !== 'http') {
               throw 'You must set the baseUrl option for your site when using this task.';
             }
-            query.batch.push({
-              relative_url: '/?fields=og_object%7Blikes.summary(total_count).limit(0)%7D,share&id=' + encodeURIComponent(page._url)
+            batch.push({
+              method: 'GET',
+              relative_url: '?fields=og_object%7Blikes.summary(total_count).limit(0)%7D,share&id=' + encodeURIComponent(page._url)
             });
           }
-          if (!query.batch.length) {
+          if (!batch.length) {
             return true;
           }
           let response;
+          form.batch = JSON.stringify(batch);
           for (let i = 0; (i < 60); i++) {
             try {
-              response = await request('https://graph.facebook.com', { json: query });
+              console.log(form);
+              response = await request('https://graph.facebook.com', { form: form });
               if ((!response) || (response.length !== query.batch.length)) {
                 throw 'Malformed response from Facebook';
               }
@@ -91,7 +99,7 @@ module.exports = {
               page.popularityMetrics.facebook.likes = _.get(data, 'og_object.likes.summary.total_count');
               page.popularityMetrics.facebook.shares = _.get(data, 'share.share_count');
               const newScore = self.facebookScore(page.popularityMetrics.facebook, fbOptions);
-              const delta += (newScore - oldScore);
+              const delta = (newScore - oldScore);
               await self.apos.docs.db.update({
                 _id: page._id
               }, {
