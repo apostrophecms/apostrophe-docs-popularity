@@ -34,6 +34,11 @@ module.exports = {
     self.addTask('update-metrics', 'Update popularity metrics for all documents for which external metrics\n' + 'such as Facebook likes are configured', async function(apos, argv) {
       await self.facebookUpdate();
     });
+    self.facebookSharedcountMap = {
+      comments: 'comment_count',
+      shares: 'share_count',
+      reactions: 'reaction_count'
+    };
     self.facebookUpdate = async function() {
       const types = Object.keys(self.apos.docs.managers);
       for (let type of types) {
@@ -42,11 +47,11 @@ module.exports = {
           continue;
         }
         const req = self.apos.tasks.getReq();
-        const fbOptions = manager.getOption(req, 'popularity.metrics.facebook');
-        if (!fbOptions) {
+        const facebookOptions = manager.getOption(req, 'popularity.metrics.facebook');
+        if (!facebookOptions) {
           continue;
         }
-        if (_.isEmpty(fbOptions)) {
+        if (_.isEmpty(facebookOptions)) {
           self.apos.utils.warn('facebook metrics are enabled for ' + manager.__meta.name + ', but\nno metrics such as "comments", "shares" or "reactions" have been configured.');
           continue;
         }
@@ -109,12 +114,15 @@ module.exports = {
             await Promise.delay(1000);
           }
           const ops = [];
-          console.log('updating db');
           for (let page of pages) {
-            const result = results[page._url] && results[page._url].Facebook;
-            if (result) {
+            const facebookSharedcount = results[page._url] && results[page._url].Facebook;
+            if (facebookSharedcount) {
+              const result = {};
+              Object.keys(self.facebookSharedcountMap).forEach(metric => {
+                result[metric] = facebookSharedcount[self.facebookSharedcountMap[metric]];
+              });
               const oldScore = (page.popularityMetrics && page.popularityMetrics.facebook && page.popularityMetrics.facebook.score) || 0.0;
-              const score = self.facebookScore(results[page._url].Facebook, fbOptions);
+              const score = self.facebookScore(result, facebookOptions);
               const facebook = {
                 ...result,
                 score
@@ -156,14 +164,9 @@ module.exports = {
         return 0;
       }
       let score = 0;
-      const map = {
-        comments: 'comment_count',
-        shares: 'share_count',
-        reactions: 'reaction_count'
-      };
-      Object.keys(map).forEach(metric => {
+      Object.keys(self.facebookSharedcountMap).forEach(metric => {
         if (options[metric]) {
-          score += (options[metric].score || 1.0) * sharedcount[map[metric]];
+          score += (options[metric].score || 1.0) * sharedcount[metric];
         }
       });
       return score;
