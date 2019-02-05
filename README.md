@@ -31,7 +31,10 @@ const apos = require('apostrophe')({
           facebook: {
             reactions: {
               // Give each metric a score so you can
-              // weight some as more important than others
+              // weight some as more important than others.
+              // Higher scores contribute more points to the
+              // popularity score per reaction, etc.
+              // It's just simple addition
               score: 1
             },
             comments: {
