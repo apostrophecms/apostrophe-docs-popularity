@@ -1,6 +1,6 @@
 {
   "name": "apostrophe-docs-popularity",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Track and sort the popularity of pieces and pages on an Apostrophe site according to metrics of your choice: social network votes, views, votes, etc.",
   "main": "index.js",
   "scripts": {
@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/apostrophecms/apostrophe-pieces-popularity.git"
+    "url": "git+https://github.com/apostrophecms/apostrophe-docs-popularity.git"
   },
   "keywords": [
     "apostrophecms",
@@ -21,12 +21,12 @@
   "author": "P'unk Avenue LLC",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/apostrophecms/apostrophe-pieces-popularity/issues"
+    "url": "https://github.com/apostrophecms/apostrophe-docs-popularity/issues"
   },
   "engines": {
     "node": ">=8.0.0"
   },
-  "homepage": "https://github.com/apostrophecms/apostrophe-pieces-popularity#readme",
+  "homepage": "https://github.com/apostrophecms/apostrophe-docs-popularity#readme",
   "devDependencies": {
     "apostrophe": "^2.75.1",
     "eslint": "^5.12.1",
