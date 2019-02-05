@@ -1,6 +1,6 @@
 {
   "name": "apostrophe-docs-popularity",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Track and sort the popularity of pieces and pages on an Apostrophe site according to metrics of your choice: social network votes, views, votes, etc.",
   "main": "index.js",
   "scripts": {

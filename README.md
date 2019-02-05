@@ -12,6 +12,12 @@ Facebook "dislikes" cannot be distinguished from likes.
 Facebook data is obtained via the [sharedcount API](https://sharedcount.com). You will
 need to obtain an API key from sharedcount to use this module.
 
+## Installation
+
+```
+npm install apostrophe-docs-popularity
+```
+
 ## Configuration
 
 ```javascript
